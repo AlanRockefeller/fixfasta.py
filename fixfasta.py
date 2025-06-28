@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from textwrap import wrap
 from typing import List, Tuple, Optional, Iterator, Dict
 from collections import defaultdict
-from pathlib import Path
 
 # Constants
 FWD_MOTIFS = [
@@ -399,27 +398,28 @@ def main():
     
     try:
         # Setup input/output
-        if args.files:
-            input_stream = fileinput.input(args.files)
-        else:
-            input_stream = sys.stdin
+        input_stream = fileinput.input(args.files) if args.files else sys.stdin
         
-        if args.output and not (args.dry_run or args.stats_only):
-            output_stream = open(args.output, 'w')
-        else:
-            output_stream = sys.stdout
-        
-        # Process sequences
-        stats = process_file(
-            input_stream,
-            output_stream,
-            max_mm=args.max_mismatches,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-            stats_only=args.stats_only,
-            report_reversed=not args.quiet,
-            quiet=args.quiet
+        from contextlib import nullcontext
+
+        output_cm = (
+            open(args.output, "w")          # real file
+            if args.output and not (args.dry_run or args.stats_only)
+            else nullcontext(sys.stdout)    # acts as a no-op context manager
         )
+
+        with output_cm as output_stream:
+            # Process sequences
+            stats = process_file(
+                input_stream,
+                output_stream,
+                max_mm=args.max_mismatches,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+                stats_only=args.stats_only,
+                report_reversed=not args.quiet,
+                quiet=args.quiet,
+            )
         
         # Print statistics if requested
         if (args.stats or args.stats_only) and not args.quiet:
@@ -431,8 +431,8 @@ def main():
             print(f"Empty:           {stats.get('empty', 0)}", file=sys.stderr)
         
         # Cleanup
-        if args.output and not (args.dry_run or args.stats_only):
-            output_stream.close()
+        if output_file is not None:
+            output_file.close()
         
     except KeyboardInterrupt:
         logging.error("Aborted by user (KeyboardInterrupt)")
