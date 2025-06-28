@@ -22,7 +22,7 @@ Ever downloaded a bunch of ITS sequences only to find that some are in the wrong
 Just download the script and make it executable:
 
 ```bash
-wget https://raw.githubusercontent.com/yourusername/fixfasta/main/fixfasta.py
+wget https://raw.githubusercontent.com/AlanRockefeller/fixfasta/main/fixfasta.py
 chmod +x fixfasta.py
 ```
 

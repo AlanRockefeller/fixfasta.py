@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from textwrap import wrap
 from typing import List, Tuple, Optional, Iterator, Dict
 from collections import defaultdict
-from pathlib import Path
 
 # Constants
 FWD_MOTIFS = [
@@ -399,15 +398,14 @@ def main():
     
     try:
         # Setup input/output
-        if args.files:
-            input_stream = fileinput.input(args.files)
-        else:
-            input_stream = sys.stdin
+        input_stream = fileinput.input(args.files) if args.files else sys.stdin
         
         if args.output and not (args.dry_run or args.stats_only):
-            output_stream = open(args.output, 'w')
+            output_file = open(args.output, 'w')
+            output_stream = output_file
         else:
             output_stream = sys.stdout
+            output_file = None
         
         # Process sequences
         stats = process_file(
@@ -431,8 +429,8 @@ def main():
             print(f"Empty:           {stats.get('empty', 0)}", file=sys.stderr)
         
         # Cleanup
-        if args.output and not (args.dry_run or args.stats_only):
-            output_stream.close()
+        if output_file is not None:
+            output_file.close()
         
     except KeyboardInterrupt:
         logging.error("Aborted by user (KeyboardInterrupt)")
