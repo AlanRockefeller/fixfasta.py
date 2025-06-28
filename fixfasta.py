@@ -430,10 +430,6 @@ def main():
             print(f"Uncertain:       {stats.get('uncertain', 0)}", file=sys.stderr)
             print(f"Empty:           {stats.get('empty', 0)}", file=sys.stderr)
         
-        # Cleanup
-        if output_file is not None:
-            output_file.close()
-        
     except KeyboardInterrupt:
         logging.error("Aborted by user (KeyboardInterrupt)")
         sys.exit(130)
