@@ -400,26 +400,24 @@ def main():
         # Setup input/output
         input_stream = fileinput.input(args.files) if args.files else sys.stdin
         
-        from contextlib import nullcontext
-
-        output_cm = (
-            open(args.output, "w")          # real file
-            if args.output and not (args.dry_run or args.stats_only)
-            else nullcontext(sys.stdout)    # acts as a no-op context manager
+        if args.output and not (args.dry_run or args.stats_only):
+            output_file = open(args.output, 'w')
+            output_stream = output_file
+        else:
+            output_stream = sys.stdout
+            output_file = None
+        
+        # Process sequences
+        stats = process_file(
+            input_stream,
+            output_stream,
+            max_mm=args.max_mismatches,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            stats_only=args.stats_only,
+            report_reversed=not args.quiet,
+            quiet=args.quiet
         )
-
-        with output_cm as output_stream:
-            # Process sequences
-            stats = process_file(
-                input_stream,
-                output_stream,
-                max_mm=args.max_mismatches,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-                stats_only=args.stats_only,
-                report_reversed=not args.quiet,
-                quiet=args.quiet,
-            )
         
         # Print statistics if requested
         if (args.stats or args.stats_only) and not args.quiet:
