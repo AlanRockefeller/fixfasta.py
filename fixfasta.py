@@ -38,6 +38,12 @@ from textwrap import wrap
 from typing import List, Tuple, Optional, Iterator, Dict
 from collections import defaultdict
 
+try:
+    import edlib
+except ImportError:
+    print("Error: edlib library is required. Install with: pip install edlib", file=sys.stderr)
+    sys.exit(1)
+
 # Constants
 FWD_MOTIFS = [
     "TCCGTAGGTGAACCTGCGG",    # ITS1-F  (18 S end)
@@ -47,6 +53,16 @@ FWD_MOTIFS = [
 DEFAULT_MAX_MM = 4   # per-motif mismatch ceiling (default)
 TIE_EPS = 0.3       # score delta below which we call it a tie
 WRAP = 80           # output FASTA line length
+
+# IUPAC equivalencies for edlib
+IUPAC_EQUIV = [("Y", "C"), ("Y", "T"), ("R", "A"), ("R", "G"),
+               ("N", "A"), ("N", "C"), ("N", "G"), ("N", "T"),
+               ("W", "A"), ("W", "T"), ("M", "A"), ("M", "C"),
+               ("S", "C"), ("S", "G"), ("K", "G"), ("K", "T"),
+               ("B", "C"), ("B", "G"), ("B", "T"),
+               ("D", "A"), ("D", "G"), ("D", "T"),
+               ("H", "A"), ("H", "C"), ("H", "T"),
+               ("V", "A"), ("V", "C"), ("V", "G")]
 
 # IUPAC complement & bitmasks
 IUPAC_COMP = str.maketrans(
@@ -88,39 +104,33 @@ class Hit:
 def best_hit(seq: str, motif: str, max_mm: int = DEFAULT_MAX_MM) -> Optional[Hit]:
     """
     Find best (fewest mismatches, earliest) fuzzy occurrence of motif in seq.
-    
-    Uses early termination when mismatches exceed threshold.
+
+    Uses gapped alignment to properly handle insertions and deletions.
     """
-    motif_len = len(motif)
-    seq_len = len(seq)
-    
-    if seq_len < motif_len:
+    if len(seq) < len(motif) - max_mm:  # Sequence too short even with deletions
         return None
-    
-    best: Optional[Hit] = None
+
     seq_upper = seq.upper()
     motif_upper = motif.upper()
-    
-    # Precompute motif masks for faster comparison
-    motif_masks = [I2M.get(c, 0) for c in motif_upper]
-    
-    for i in range(seq_len - motif_len + 1):
-        mism = 0
-        
-        # Use index-based comparison for better performance
-        for j in range(motif_len):
-            seq_mask = I2M.get(seq_upper[i + j], 0)
-            if not (seq_mask & motif_masks[j]):
-                mism += 1
-                if mism > max_mm:
-                    break
-        else:  # Completed full motif scan
-            if best is None or (mism, i) < (best.mism, best.pos):
-                best = Hit(mism, i)
-                if mism == 0:  # Can't beat perfect match
-                    return best
-    
-    return best
+
+    # Use edlib for gapped alignment with IUPAC support
+    result = edlib.align(
+        motif_upper,
+        seq_upper,
+        mode='HW',  # Infix mode (like sliding window but with gaps)
+        task='locations',
+        k=max_mm,  # Maximum edit distance
+        additionalEqualities=IUPAC_EQUIV
+    )
+
+    # Check if we found a match within the distance threshold
+    if result['editDistance'] == -1 or result['editDistance'] > max_mm:
+        return None
+
+    # Find the best location (earliest start position for ties in edit distance)
+    best_location = min(result['locations'], key=lambda loc: loc[0])
+
+    return Hit(result['editDistance'], best_location[0])
 
 
 @dataclass
