@@ -1,6 +1,6 @@
 # fixfasta.py
 
-Version 1.0 - June 28, 2025
+Version 1.1 - June 30, 2025
 
 A tool for automatically fixing the orientation of fungal ITS sequences in FASTA files. Perfect for cleaning up sequences downloaded from databases like MycoMap or GenBank where some sequences might be reverse-complemented.
 
@@ -133,6 +133,44 @@ mafft sequences_oriented.fasta > aligned.fasta
 - The tool preserves sequence names exactly 
 - Handles messy FASTA files gracefully (like those with stray '>' symbols)
 - All diagnostic output goes to stderr, so stdout piping remains clean
+
+
+---
+
+# getfasta.py
+
+Version 1.0 – June 30, 2025
+
+A tiny helper that grabs the FASTA files behind a **MycoMap BLAST** result page – no clicking, no copy‑and‑paste, just the files on disk ready to go. As of v1.1 it also tells you **how many sequences** were retrieved.
+
+## What it does
+
+* Pulls the **NCBI‑side** FASTA (`ncbi_<ID>.fasta`) and the **local MycoMap** FASTA (`myco_<ID>.fasta`) for a given BLAST job.
+* Prints the download time, file size **and** sequence count for each file.
+* Names everything with the BLAST numeric ID.
+
+## Example
+
+```bash
+python getfasta.py https://mycomap.com/genetics/blast-search/a04-inat237420128-1-ric77-332392-r265167/
+```
+
+Output looks like this:
+
+```
+Downloading FASTA files for MycoBLAST ID: 265167
+NCBI downloaded in 2.85s (74953 bytes, 97 sequences)
+MycoBLAST downloaded in 1.02s (36161 bytes, 50 sequences)
+```
+
+## How it works
+
+`getfasta.py` digs the numeric `r<digits>` ID out of whatever MycoMap BLAST URL you throw at it, then hits two internal endpoints:
+
+* `do=fasta`  – the NCBI sequences MycoMap pulled in for the search
+* `do=localFasta` – the local, user‑contributed sequences MycoMap keeps
+
+Each response is saved verbatim, then the script counts lines that start with `>` to report the number of sequences.
 
 ## License
 

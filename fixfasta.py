@@ -2,7 +2,7 @@
 """
 fixfasta.py — robust auto-orientation of fungal ITS reads
 
-Version 1.0 - June 28, 2025
+Version 1.1 - June 30, 2025
 
 By Alan Rockefeller 
 
@@ -429,10 +429,6 @@ def main():
             print(f"Reverse:         {stats.get('reverse', 0)}", file=sys.stderr)
             print(f"Uncertain:       {stats.get('uncertain', 0)}", file=sys.stderr)
             print(f"Empty:           {stats.get('empty', 0)}", file=sys.stderr)
-        
-        # Cleanup
-        if output_file is not None:
-            output_file.close()
         
     except KeyboardInterrupt:
         logging.error("Aborted by user (KeyboardInterrupt)")
