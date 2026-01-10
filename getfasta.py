@@ -3,7 +3,7 @@
 """
 Mycomap FASTA downloader
 
-By Alan Rockefeller - June 30, 2025.    Version 1.1
+By Alan Rockefeller - January 10, 2026.    Version 1.2
 
 """
 
@@ -12,6 +12,7 @@ import urllib.parse
 import sys
 import re
 import time
+import socket
 
 # Set a timeout for network requests in seconds
 REQUEST_TIMEOUT = 10
@@ -71,7 +72,12 @@ try:
         print(f"Error writing to file ncbi_{blast_id}.fasta: {e}")
 
 except urllib.error.URLError as e:
-    print(f"Error downloading NCBI data: {e}")
+    if isinstance(e.reason, socket.timeout):
+        print(f"Error: The request for NCBI data timed out after {REQUEST_TIMEOUT} seconds.")
+    else:
+        print(f"Error downloading NCBI data: {e}")
+except socket.timeout:
+    print(f"Error: The request for NCBI data timed out after {REQUEST_TIMEOUT} seconds.")
 except TimeoutError:
     print(f"Error: The request for NCBI data timed out after {REQUEST_TIMEOUT} seconds.")
 
@@ -103,6 +109,11 @@ try:
         print(f"Error writing to file myco_{blast_id}.fasta: {e}")
 
 except urllib.error.URLError as e:
-    print(f"Error downloading MycoBLAST data: {e}")
+    if isinstance(e.reason, socket.timeout):
+        print(f"Error: The request for MycoBLAST data timed out after {REQUEST_TIMEOUT} seconds.")
+    else:
+        print(f"Error downloading MycoBLAST data: {e}")
+except socket.timeout:
+    print(f"Error: The request for MycoBLAST data timed out after {REQUEST_TIMEOUT} seconds.")
 except TimeoutError:
     print(f"Error: The request for MycoBLAST data timed out after {REQUEST_TIMEOUT} seconds.")
