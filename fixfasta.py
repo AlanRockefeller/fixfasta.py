@@ -2,7 +2,7 @@
 """
 fixfasta.py — robust auto-orientation of fungal ITS reads
 
-Version 1.1 - June 30, 2025
+Version 1.2 - January 10, 2026
 
 By Alan Rockefeller 
 
@@ -11,12 +11,17 @@ Useful for building phylogenetic trees from data downloaded from Mycomap - often
 - Accepts FASTA files on the command line (or stdin if none given)
 - Repairs stray '>' symbols inside sequence lines
 - Uses three conserved ITS motifs (ITS1-F, 5.8 S core, ITS4)
-  with IUPAC-aware fuzzy matching (≤ 4 mismatches over 20 bp)
+  with IUPAC-aware fuzzy matching (≤ 4 mismatches over 20 bp).
+- Note: Only substitutions are counted (no indels). 'N' and '-' are treated 
+  as mismatches to prevent spurious hits.
 - Orientation logic:
-    1. orientation with *more* distinct motif hits wins
-    2. if tied, one with *fewer total mismatches* wins
-    3. if still tied, one whose *best* hit starts earlier wins
-    4. if score difference < TIE_EPS → "uncertain"
+    1. Orientation with *more* distinct motif hits wins.
+    2. If tied, one with *fewer total mismatches* wins.
+    3. If still tied, one whose *best* hit starts earlier wins.
+    4. Score difference < TIE_EPS → "uncertain".
+    5. CONSERVATIVE REVERSAL GATE: To reverse, the reverse orientation MUST 
+       have hits for the 5.8S core AND at least one flanking motif, AND 
+       the core hit must have ≤ 2 mismatches.
 - Wraps output FASTA to 80 nt; all diagnostics go to stderr
 - Reports which sequences were reversed (use -q to suppress)
 
@@ -37,6 +42,7 @@ from dataclasses import dataclass
 from textwrap import wrap
 from typing import List, Tuple, Optional, Iterator, Dict
 from collections import defaultdict
+from contextlib import contextmanager
 
 # Constants
 FWD_MOTIFS = [
@@ -47,6 +53,10 @@ FWD_MOTIFS = [
 DEFAULT_MAX_MM = 4   # per-motif mismatch ceiling (default)
 TIE_EPS = 0.3       # score delta below which we call it a tie
 WRAP = 80           # output FASTA line length
+
+CORE_IDX = 1          # 5.8S core is motif #1 in your list
+FLANK_IDXS = (0, 2)   # ITS1-F and ITS4
+CORE_MAX_MM = 2       # require a reasonably good 5.8S hit to reverse
 
 # IUPAC complement & bitmasks
 IUPAC_COMP = str.maketrans(
@@ -78,6 +88,19 @@ def compatible(a: str, b: str) -> bool:
     return bool(I2M.get(a, 0) & I2M.get(b, 0))
 
 
+@contextmanager
+def smart_open(filename: Optional[str] = None):
+    """Context manager for file opening that defaults to stdout."""
+    if filename and filename != "-":
+        fh = open(filename, "w", encoding="utf-8", newline="\n")
+        try:
+            yield fh
+        finally:
+            fh.close()
+    else:
+        yield sys.stdout
+
+
 @dataclass(frozen=True)
 class Hit:
     """Represents a motif hit with mismatches and position."""
@@ -88,39 +111,46 @@ class Hit:
 def best_hit(seq: str, motif: str, max_mm: int = DEFAULT_MAX_MM) -> Optional[Hit]:
     """
     Find best (fewest mismatches, earliest) fuzzy occurrence of motif in seq.
-    
-    Uses early termination when mismatches exceed threshold.
+
+    IMPORTANT: 'N' and '-' are treated as mismatches (no evidence), to avoid
+    false motif hits in low-quality/ambiguous regions.
     """
     motif_len = len(motif)
     seq_len = len(seq)
-    
     if seq_len < motif_len:
         return None
-    
+
     best: Optional[Hit] = None
     seq_upper = seq.upper()
     motif_upper = motif.upper()
-    
-    # Precompute motif masks for faster comparison
+
     motif_masks = [I2M.get(c, 0) for c in motif_upper]
-    
+
     for i in range(seq_len - motif_len + 1):
         mism = 0
-        
-        # Use index-based comparison for better performance
         for j in range(motif_len):
-            seq_mask = I2M.get(seq_upper[i + j], 0)
+            c = seq_upper[i + j]
+
+            # Treat ambiguous/unknown as mismatch (prevents N-runs creating perfect hits)
+            if c == "N" or c == "-":
+                mism += 1
+                if mism > max_mm:
+                    break
+                continue
+
+            seq_mask = I2M.get(c, 0)
             if not (seq_mask & motif_masks[j]):
                 mism += 1
                 if mism > max_mm:
                     break
-        else:  # Completed full motif scan
+        else:
             if best is None or (mism, i) < (best.mism, best.pos):
                 best = Hit(mism, i)
-                if mism == 0:  # Can't beat perfect match
+                if mism == 0:
                     return best
-    
+
     return best
+
 
 
 @dataclass
@@ -128,25 +158,32 @@ class OrientationStats:
     """Statistics for orientation decision."""
     hits: List[Hit]
     total_mm: int
-    best: Hit
-    orientation: Optional[str] = None
+    best: Optional[Hit]
+    hit_map: Dict[int, Hit]
 
 
-def collect_stats(seq: str, motifs: List[str], max_mm: int = DEFAULT_MAX_MM, label: str = "") -> OrientationStats:
+def collect_stats(seq: str, motifs: List[str], max_mm: int = DEFAULT_MAX_MM) -> OrientationStats:
     """Collect statistics for a set of motifs."""
-    hits = []
-    for motif in motifs:
+    hits: List[Hit] = []
+    hit_map: Dict[int, Hit] = {}
+
+    for idx, motif in enumerate(motifs):
         hit = best_hit(seq, motif, max_mm)
         if hit:
             hits.append(hit)
+            hit_map[idx] = hit
     
     if not hits:
-        return OrientationStats([], float('inf'), Hit(float('inf'), float('inf')))
+        return OrientationStats([], float('inf'), None, hit_map={})
     
     total_mm = sum(h.mism for h in hits)
     best = min(hits, key=lambda h: (h.mism, h.pos))
     
-    return OrientationStats(hits, total_mm, best)
+    return OrientationStats(hits, total_mm, best, hit_map=hit_map)
+
+
+def has_core_and_flank(stats: OrientationStats) -> bool:
+    return (CORE_IDX in stats.hit_map) and any(i in stats.hit_map for i in FLANK_IDXS)
 
 
 def decide_orientation(seq: str, max_mm: int = DEFAULT_MAX_MM, verbose: bool = False) -> Tuple[str, OrientationStats, OrientationStats]:
@@ -155,41 +192,67 @@ def decide_orientation(seq: str, max_mm: int = DEFAULT_MAX_MM, verbose: bool = F
     
     Returns: (orientation, forward_stats, reverse_stats)
     """
-    fwd = collect_stats(seq, FWD_MOTIFS, max_mm, "forward")
-    rev = collect_stats(seq, REV_MOTIFS, max_mm, "reverse")
+    fwd = collect_stats(seq, FWD_MOTIFS, max_mm)
+    rev = collect_stats(seq, REV_MOTIFS, max_mm)
     
     # No hits at all
     if not fwd.hits and not rev.hits:
         return "uncertain", fwd, rev
     
-    # Different number of hits
+    # If reverse would win but does NOT have "core + flank", do not reverse.
+    # (This is the big false-reversal killer.)
+    # We'll still allow reversing if forward has *zero* hits and reverse has core+flank.
+    # Otherwise, ambiguity => uncertain.
+    def reverse_allowed() -> bool:
+        # Check 1: Must have core + at least one flank
+        if not has_core_and_flank(rev):
+            return False
+        
+        # Check 2: Require a decent 5.8S-core hit in the reverse orientation
+        # (Prevents reversing long sequences on flimsy evidence.)
+        rev_core = rev.hit_map.get(CORE_IDX)
+        if rev_core is None or rev_core.mism > CORE_MAX_MM:
+            return False
+        
+        # Check 3: Positional sanity. In a reversed raw sequence:
+        # rev(ITS4) [idx 2] should be BEFORE core [idx 1].
+        # rev(ITS1-F) [idx 0] should be AFTER core [idx 1].
+        if 2 in rev.hit_map and rev.hit_map[2].pos > rev_core.pos:
+            return False
+        if 0 in rev.hit_map and rev.hit_map[0].pos < rev_core.pos:
+            return False
+            
+        return True
+    
+    # Primary winner selection as before (hits, then total mismatches, then best hit)
     if len(fwd.hits) != len(rev.hits):
-        ori = "forward" if len(fwd.hits) > len(rev.hits) else "reverse"
-        return ori, fwd, rev
+        winner = "forward" if len(fwd.hits) > len(rev.hits) else "reverse"
+    elif fwd.total_mm != rev.total_mm:
+        winner = "forward" if fwd.total_mm < rev.total_mm else "reverse"
+    else:
+        # Final tie-breaker: earliest best hit (position scaled).
+        # At this point, both orientations have at least one hit (otherwise we'd 
+        # have returned 'uncertain' for the 'both empty' case above).
+        assert fwd.best is not None and rev.best is not None
+        score_f = fwd.best.mism * 10 + fwd.best.pos / 1000
+        score_r = rev.best.mism * 10 + rev.best.pos / 1000
+        
+        if abs(score_f - score_r) < TIE_EPS:
+            return "uncertain", fwd, rev
+        
+        winner = "forward" if score_f < score_r else "reverse"
     
-    # Different total mismatches
-    if fwd.total_mm != rev.total_mm:
-        ori = "forward" if fwd.total_mm < rev.total_mm else "reverse"
-        return ori, fwd, rev
+    # Enforce conservative reversal rule
+    if winner == "reverse" and not reverse_allowed():
+        # If forward has at least one real hit, keep forward; otherwise uncertain
+        return ("forward" if fwd.hits else "uncertain"), fwd, rev
     
-    # Final tie-breaker: earliest best hit (position scaled)
-    score_f = fwd.best.mism * 10 + fwd.best.pos / 1000
-    score_r = rev.best.mism * 10 + rev.best.pos / 1000
-    
-    if abs(score_f - score_r) < TIE_EPS:
-        return "uncertain", fwd, rev
-    
-    ori = "forward" if score_f < score_r else "reverse"
-    return ori, fwd, rev
+    return winner, fwd, rev
 
 
 def validate_sequence(seq: str, header: str) -> List[str]:
     """Validate sequence and return list of warnings."""
     warnings = []
-    
-    if not seq:
-        warnings.append(f"Empty sequence for '{header}'")
-        return warnings
     
     # Check for non-IUPAC characters
     invalid_chars = re.findall(r"[^ACGTRYMKWSVHDBNacgtrymkwsvhdbn\-]", seq)
@@ -276,15 +339,17 @@ def process_file(
     for header, seq in fasta_reader(input_stream, quiet=quiet):
         counts['total'] += 1
         
+        if not seq:
+            counts['empty'] += 1
+            if not quiet:
+                logging.warning(f"Empty sequence for '{header}'")
+            continue
+        
         # Validate sequence
         warnings = validate_sequence(seq, header)
         if not quiet:
             for warning in warnings:
                 logging.warning(warning)
-        
-        if not seq:
-            counts['empty'] += 1
-            continue
         
         # Determine orientation
         orientation, fwd_stats, rev_stats = decide_orientation(seq, max_mm, verbose)
@@ -372,7 +437,10 @@ def main():
         "--max-mismatches",
         type=int,
         default=DEFAULT_MAX_MM,
-        help=f"Maximum mismatches per motif (default: {DEFAULT_MAX_MM})"
+        help=(
+            f"Maximum mismatches per motif (default: {DEFAULT_MAX_MM}). "
+            "Note: Only substitutions are counted (no indels). 'N' and '-' count as mismatches."
+        )
     )
     parser.add_argument(
         "-q", "--quiet",
@@ -397,18 +465,13 @@ def main():
     )
     
     try:
-        # Setup input/output
-        input_stream = fileinput.input(args.files) if args.files else sys.stdin
-        
-        from contextlib import nullcontext
+        # Determine output filename (None if stdout)
+        out_filename = args.output if args.output and not (args.dry_run or args.stats_only) else None
 
-        output_cm = (
-            open(args.output, "w")          # real file
-            if args.output and not (args.dry_run or args.stats_only)
-            else nullcontext(sys.stdout)    # acts as a no-op context manager
-        )
+        # Explicitly handle stdin fallback for fileinput
+        files_to_read = args.files if args.files else ("-",)
 
-        with output_cm as output_stream:
+        with fileinput.input(files=files_to_read) as input_stream, smart_open(out_filename) as output_stream:
             # Process sequences
             stats = process_file(
                 input_stream,

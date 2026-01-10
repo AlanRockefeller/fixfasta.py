@@ -1,6 +1,8 @@
 # fixfasta.py
 
-Version 1.1 - June 30, 2025
+Version 1.2 - January 10, 2026
+
+By Alan Rockefeller
 
 A tool for automatically fixing the orientation of fungal ITS sequences in FASTA files. Perfect for cleaning up sequences downloaded from databases like MycoMap or GenBank where some sequences might be reverse-complemented.
 
@@ -11,11 +13,13 @@ Ever downloaded a bunch of ITS sequences only to find that some are in the wrong
 ## Features
 
 - **Smart orientation detection** using three conserved ITS motifs (ITS1-F, 5.8S core, ITS4)
-- **IUPAC-aware fuzzy matching** - handles ambiguous nucleotides and allows up to 4 mismatches
+- **Conservative Reversal Gate**: Sequences are only reversed if there is strong evidence (core + flank presence and high-quality core hit)
+- **IUPAC-aware fuzzy matching** - handles ambiguous nucleotides
+- **Robustness**: 'N' and '-' are treated as mismatches to prevent spurious hits in low-quality regions
 - **Automatic repair** of malformed FASTA files with stray '>' symbols
 - **Detailed reporting** of which sequences were reversed (or silent operation with `-q`)
-- **Fast and efficient** - processes large files quickly
-- Uses orientation logic that breaks ties intelligently
+- **Fast and efficient** - processes large files quickly using a high-performance sliding window scan
+- **Cross-platform consistent**: Ensures UTF-8 encoding and Unix line endings (\n) for all output
 
 ## Installation
 
@@ -27,7 +31,7 @@ chmod +x fixfasta.py
 ```
 
 Requirements:
-- Python 3.6+
+- Python 3.7+
 - No external dependencies - uses only Python standard library
 
 ## Quick Start
@@ -39,11 +43,9 @@ Basic usage - fix orientation and see what was changed:
 
 The script will report which sequences it reversed:
 ```
-=== Reversed sequences (8) ===
-  AF430271_Russula_fragilis
-  KC885965_Amanita_muscaria
-  MH856042_Cortinarius_sp
-  ...
+=== Reversed sequences (2) ===
+  DQ422012_Russula_ochrospora
+  iNat180216325_Russula_sp
 ```
 
 ## Usage Examples
@@ -83,12 +85,13 @@ cat *.fasta | ./fixfasta.py > all_fixed.fasta
 ```
 -h, --help            Show help message
 -o, --output          Output file (default: stdout)
--n, --dry-run        Don't write output, just analyze
--v, --verbose        Verbose output showing decision process
--s, --stats          Print orientation statistics
---stats-only         Only print statistics, no sequence output
--q, --quiet          Suppress all warnings and reports
---max-mismatches N   Maximum mismatches per motif (default: 4)
+-n, --dry-run         Don\'t write output, just analyze
+-v, --verbose         Verbose output showing decision process
+-s, --stats           Print orientation statistics
+--stats-only          Only print statistics, no sequence output
+-q, --quiet           Suppress all warnings and reports
+--max-mismatches N    Maximum mismatches per motif (default: 4).
+                      Note: Only substitutions are counted (no indels).
 ```
 
 ## How It Works
@@ -99,20 +102,26 @@ The tool uses three conserved motifs commonly found in fungal ITS sequences:
 2. **5.8S core** (GCATCGATGAAGAACGCAGC) - middle region
 3. **ITS4** (TCCTCCGCTTATTGATATGC) - found at the 28S start
 
-For each sequence, it:
-1. Searches for these motifs in both orientations (forward and reverse-complement)
-2. Counts how many motifs are found and how many mismatches each has
-3. Makes a decision based on:
-   - Which orientation has more motif hits
-   - If tied, which has fewer total mismatches
-   - If still tied, which has the earliest best hit
-4. Reverse-complements sequences that are backwards
+### Orientation Logic
 
-The fuzzy matching allows up to 4 mismatches per 20bp motif and understands IUPAC ambiguity codes (R, Y, S, W, K, M, etc.).
+For each sequence, it:
+1. Searches for these motifs in both orientations (forward and reverse-complement).
+2. Uses a fast sliding window to count mismatches (substitutions only).
+3. **Primary Winner**:
+   - Which orientation has more distinct motif hits.
+   - If tied, which has fewer total mismatches.
+   - If still tied, which has the earliest best hit.
+4. **Conservative Reversal Gate**: Even if "reverse" is the primary winner, the sequence is **only** reversed if:
+   - It contains a hit for the **5.8S core** AND at least one **flanking motif** (ITS1-F or ITS4).
+   - The 5.8S core hit in the reverse orientation is high quality (≤ 2 mismatches).
+   - The motifs appear in the **correct relative order** (ITS4-rev before core, ITS1F-rev after core).
+5. If the reversal gate fails, it stays "forward" (or "uncertain" if no hits at all were found).
+
+The fuzzy matching understands IUPAC ambiguity codes (R, Y, S, W, K, M, etc.). Note that 'N' and '-' are always treated as mismatches to avoid false positives in low-quality sequence data.
 
 ## Real-World Use Case
 
-This tool was originally created to process ITS sequences downloaded from MycoMap for phylogenetic tree construction. It's particularly useful when combining sequences from multiple sources where orientation consistency isn't guaranteed.
+This tool was originally created to process ITS sequences downloaded from MycoMap for phylogenetic tree construction. It\'s particularly useful when combining sequences from multiple sources where orientation consistency isn\'t guaranteed.
 
 Example workflow:
 ```bash
@@ -122,24 +131,24 @@ Example workflow:
 # Fix orientations
 ./fixfasta.py mycomap.fa ncbi.fa > sequences_oriented.fas
 
-# Now ready for MAFFT alignment, phylogeny.fr, RaxML, etc
+# Now ready for MAFFT alignment, RAxML, etc.
 mafft sequences_oriented.fasta > aligned.fasta
 ```
 
 ## Tips
 
-- The default behavior shows you what was changed - use `-q` for silent operation in pipelines
-- Use `--dry-run` first on new datasets to see what would be changed
-- The tool preserves sequence names exactly 
-- Handles messy FASTA files gracefully (like those with stray '>' symbols)
-- All diagnostic output goes to stderr, so stdout piping remains clean
+- The default behavior shows you what was changed - use `-q` for silent operation in pipelines.
+- Use `--dry-run` first on new datasets to see what would be changed.
+- The tool preserves sequence names exactly.
+- Handles messy FASTA files gracefully (like those with stray '>' symbols).
+- All diagnostic output goes to stderr, so stdout piping remains clean.
 
 
 ---
 
 # getfasta.py
 
-Version 1.0 – June 30, 2025
+Version 1.0 – June 30, 2025
 
 A tiny helper that grabs the FASTA files behind a **MycoMap BLAST** result page – no clicking, no copy‑and‑paste, just the files on disk ready to go. As of v1.1 it also tells you **how many sequences** were retrieved.
 
@@ -163,15 +172,6 @@ NCBI downloaded in 2.85s (74953 bytes, 97 sequences)
 MycoBLAST downloaded in 1.02s (36161 bytes, 50 sequences)
 ```
 
-## How it works
-
-`getfasta.py` digs the numeric `r<digits>` ID out of whatever MycoMap BLAST URL you throw at it, then hits two internal endpoints:
-
-* `do=fasta`  – the NCBI sequences MycoMap pulled in for the search
-* `do=localFasta` – the local, user‑contributed sequences MycoMap keeps
-
-Each response is saved verbatim, then the script counts lines that start with `>` to report the number of sequences.
-
 ## License
 
 This project is licensed under the MIT License:
@@ -179,7 +179,7 @@ This project is licensed under the MIT License:
 ```
 MIT License
 
-Copyright (c) 2025 Alan Rockefeller
+Copyright (c) 2026 Alan Rockefeller
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -209,4 +209,3 @@ https://github.com/AlanRockefeller/fixfasta.py
 ## Acknowledgments
 
 Thanks to the mycological community for providing the data that made this tool necessary, and to everyone who's contributed sequences to public databases.
-
