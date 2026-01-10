@@ -70,16 +70,20 @@ try:
               f"({len(ncbi_bytes)} bytes, {ncbi_seqs} sequences)")
     except IOError as e:
         print(f"Error writing to file ncbi_{blast_id}.fasta: {e}")
+        sys.exit(1)
 
 except urllib.error.URLError as e:
     if isinstance(e.reason, socket.timeout):
         print(f"Error: The request for NCBI data timed out after {REQUEST_TIMEOUT} seconds.")
     else:
         print(f"Error downloading NCBI data: {e}")
+    sys.exit(1)
 except socket.timeout:
     print(f"Error: The request for NCBI data timed out after {REQUEST_TIMEOUT} seconds.")
+    sys.exit(1)
 except TimeoutError:
     print(f"Error: The request for NCBI data timed out after {REQUEST_TIMEOUT} seconds.")
+    sys.exit(1)
 
 
 # MycoBLAST download
@@ -107,13 +111,17 @@ try:
               f"({len(myco_bytes)} bytes, {myco_seqs} sequences)")
     except IOError as e:
         print(f"Error writing to file myco_{blast_id}.fasta: {e}")
+        sys.exit(1)
 
 except urllib.error.URLError as e:
     if isinstance(e.reason, socket.timeout):
         print(f"Error: The request for MycoBLAST data timed out after {REQUEST_TIMEOUT} seconds.")
     else:
         print(f"Error downloading MycoBLAST data: {e}")
+    sys.exit(1)
 except socket.timeout:
     print(f"Error: The request for MycoBLAST data timed out after {REQUEST_TIMEOUT} seconds.")
+    sys.exit(1)
 except TimeoutError:
     print(f"Error: The request for MycoBLAST data timed out after {REQUEST_TIMEOUT} seconds.")
+    sys.exit(1)
