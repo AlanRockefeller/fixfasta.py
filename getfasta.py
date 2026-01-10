@@ -9,6 +9,7 @@ By Alan Rockefeller - January 10, 2026.    Version 1.2
 
 import urllib.request
 import urllib.parse
+import urllib.error
 import sys
 import re
 import time
