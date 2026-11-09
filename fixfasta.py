@@ -2,7 +2,7 @@
 """
 fixfasta.py — robust auto-orientation of fungal ITS reads
 
-Version 1.2 - January 10, 2026
+Version 1.3 - November 9, 2026
 
 By Alan Rockefeller 
 
@@ -10,6 +10,8 @@ Useful for building phylogenetic trees from data downloaded from Mycomap - often
 
 - Accepts FASTA files on the command line (or stdin if none given)
 - Repairs stray '>' symbols inside sequence lines
+- Repairs headers that have the sequence fused onto the same line (common in
+  iNaturalist exports); a junk second header is appended to the real one
 - Uses three conserved ITS motifs (ITS1-F, 5.8 S core, ITS4)
   with IUPAC-aware fuzzy matching (≤ 4 mismatches over 20 bp).
 - Note: Only substitutions are counted (no indels). 'N' and '-' are treated 
@@ -57,6 +59,11 @@ WRAP = 80           # output FASTA line length
 CORE_IDX = 1          # 5.8S core is motif #1 in your list
 FLANK_IDXS = (0, 2)   # ITS1-F and ITS4
 CORE_MAX_MM = 2       # require a reasonably good 5.8S hit to reverse
+
+# Headers with the sequence fused onto the same line (no newline in between)
+FUSED_MIN_LEN = 50    # shortest trailing nucleotide run treated as sequence
+FUSED_MIN_ACGT = 0.8  # fraction of that run that must be plain A/C/G/T
+FUSED_SEQ_RE = re.compile(r"[ACGTRYMKWSVHDBN]{%d,}$" % FUSED_MIN_LEN)
 
 # IUPAC complement & bitmasks
 IUPAC_COMP = str.maketrans(
@@ -263,48 +270,105 @@ def validate_sequence(seq: str, header: str) -> List[str]:
     return warnings
 
 
-def fasta_reader(stream, quiet: bool = False) -> Iterator[Tuple[str, str]]:
+def split_fused_header(text: str) -> Tuple[str, str]:
     """
-    Read FASTA sequences from stream, handling stray '>' symbols.
-    
+    Split a header that has its sequence fused onto the end (no newline).
+
+    Returns (header, sequence). The sequence is the trailing run of uppercase
+    IUPAC nucleotide characters, if it is at least FUSED_MIN_LEN long and
+    mostly A/C/G/T; otherwise it is "" and the header is returned unchanged.
+
+    Note: junk-header letters that are themselves uppercase IUPAC codes and sit
+    directly against the sequence cannot be told apart from it and are absorbed.
+    """
+    match = FUSED_SEQ_RE.search(text)
+    if not match:
+        return text, ""
+
+    seq = match.group()
+    acgt = sum(seq.count(b) for b in "ACGT")
+    if acgt < FUSED_MIN_ACGT * len(seq):
+        return text, ""
+
+    return text[:match.start()].strip(), seq
+
+
+def fasta_reader(
+    stream,
+    quiet: bool = False,
+    repairs: Optional[List[str]] = None
+) -> Iterator[Tuple[str, str]]:
+    """
+    Read FASTA sequences from stream, handling stray '>' symbols and headers
+    that have the sequence fused onto the same line.
+
+    If `repairs` is given, the header of every record recovered from a fused
+    header line is appended to it.
+
     Yields: (header, sequence) tuples
     """
     header: Optional[str] = None
+    header_is_placeholder = False
     sequence_parts: List[str] = []
     line_num = 0
-    
+
     for raw_line in stream:
         line_num += 1
         line = raw_line.rstrip("\n\r")
-        
+
         if line.startswith(">"):
-            # Yield previous sequence if exists
-            if header is not None:
-                yield header, "".join(sequence_parts)
-            
-            # Start new sequence
-            header = line[1:].strip() or f"<empty_header_line_{line_num}>"
-            sequence_parts = []
+            # A real header line (kept whole, even if it contains another '>')
+            chunks = [line[1:]]
+            stray = False
+        elif ">" in line:
+            # Stray '>' symbols in a sequence line: text before the first one
+            # is sequence, each subsequent part starts a new record
+            parts = line.split(">")
+            sequence_parts.append(parts[0].strip())
+            chunks = parts[1:]
+            stray = True
         else:
-            # Handle stray '>' symbols in sequence lines
-            if ">" in line:
-                parts = line.split(">")
-                sequence_parts.append(parts[0].strip())
-                
-                # Each subsequent part becomes a new sequence
-                for i, part in enumerate(parts[1:], 1):
-                    logging.warning(
-                        f"Line {line_num}: Stray '>' found, creating new sequence "
-                        f"'{part.strip() or f'<empty_from_stray_{line_num}_{i}'}'"
-                    )
-                    if header is not None:
-                        yield header, "".join(sequence_parts)
-                    header = part.strip() or f"<empty_from_stray_{line_num}_{i}>"
-                    sequence_parts = []
+            # Normal sequence line
+            sequence_parts.append(line.strip())
+            continue
+
+        for i, chunk in enumerate(chunks, 1):
+            placeholder = (
+                f"<empty_from_stray_{line_num}_{i}>" if stray
+                else f"<empty_header_line_{line_num}>"
+            )
+            head, fused_seq = split_fused_header(chunk.strip())
+
+            if stray:
+                logging.warning(
+                    f"Line {line_num}: Stray '>' found, creating new sequence "
+                    f"'{head or placeholder}'"
+                )
+
+            if fused_seq and header is not None and not any(sequence_parts):
+                # The previous header has no sequence of its own, so this line is
+                # a second (junk) header for the same record: merge the headers.
+                if header_is_placeholder:
+                    header = head or header
+                    header_is_placeholder = not head
+                elif head:
+                    header = f"{header} {head}"
             else:
-                # Normal sequence line
-                sequence_parts.append(line.strip())
-    
+                if header is not None:
+                    yield header, "".join(sequence_parts)
+                header = head or placeholder
+                header_is_placeholder = not head
+
+            sequence_parts = [fused_seq] if fused_seq else []
+
+            if fused_seq:
+                logging.warning(
+                    f"Line {line_num}: Header fused with sequence; recovered "
+                    f"{len(fused_seq)} nt for '{header}'"
+                )
+                if repairs is not None:
+                    repairs.append(header)
+
     # Don't forget the last sequence
     if header is not None:
         yield header, "".join(sequence_parts)
@@ -335,8 +399,9 @@ def process_file(
     counts = defaultdict(int)
     reversed_sequences = []
     uncertain_sequences = []
-    
-    for header, seq in fasta_reader(input_stream, quiet=quiet):
+    repaired_headers: List[str] = []
+
+    for header, seq in fasta_reader(input_stream, quiet=quiet, repairs=repaired_headers):
         counts['total'] += 1
         
         if not seq:
@@ -393,6 +458,7 @@ def process_file(
             for header in uncertain_sequences:
                 print(f"  {header}", file=sys.stderr)
     
+    counts['repaired'] = len(repaired_headers)
     return dict(counts)
 
 
@@ -492,6 +558,7 @@ def main():
             print(f"Reverse:         {stats.get('reverse', 0)}", file=sys.stderr)
             print(f"Uncertain:       {stats.get('uncertain', 0)}", file=sys.stderr)
             print(f"Empty:           {stats.get('empty', 0)}", file=sys.stderr)
+            print(f"Repaired:        {stats.get('repaired', 0)}", file=sys.stderr)
         
     except KeyboardInterrupt:
         logging.error("Aborted by user (KeyboardInterrupt)")
