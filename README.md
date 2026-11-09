@@ -1,6 +1,6 @@
 # fixfasta.py
 
-Version 1.2 - January 10, 2026
+Version 1.3 - November 9, 2026
 
 By Alan Rockefeller
 
@@ -17,6 +17,7 @@ Ever downloaded a bunch of ITS sequences only to find that some are in the wrong
 - **IUPAC-aware fuzzy matching** - handles ambiguous nucleotides
 - **Robustness**: 'N' and '-' are treated as mismatches to prevent spurious hits in low-quality regions
 - **Automatic repair** of malformed FASTA files with stray '>' symbols
+- **Automatic repair** of headers with the sequence fused onto the same line (seen in iNaturalist exports) - the sequence is recovered and a junk second header is appended to the real one
 - **Detailed reporting** of which sequences were reversed (or silent operation with `-q`)
 - **Fast and efficient** - processes large files quickly using a high-performance sliding window scan
 - **Cross-platform consistent**: Ensures UTF-8 encoding and Unix line endings (\n) for all output
